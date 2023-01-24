@@ -1,3 +1,10 @@
-a = {1:2, 3:4, 5:6}
+class PassByReference:
+    def __init__(self):
+        self.variable = 'Original'
+        self.change(self.variable)
+        print(self.variable)
 
-print(next(a.keys()))
+    def change(self, var):
+        var = 'Changed'
+
+o = PassByReference()
