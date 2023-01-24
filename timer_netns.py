@@ -22,6 +22,7 @@ def main():
     overlay_networks = {}
     netns_ids = set()
     docker_ips = set()
+    cont_ip_to_name = {}
     client = docker.APIClient(base_url='unix://var/run/docker.sock') 
     for cont in containers_name:
         cont_inspect = client.inspect_container(cont)
@@ -31,40 +32,34 @@ def main():
         net_name = list(cont_networks.keys())[0]
         overlay_networks[net_name] = cont_networks[net_name]["NetworkID"]
         netns_ids.add(get_netns_inode(cont_pid))
-        # print("%-15s, %-5s, %-15s" % (cont, container_pid, get_netns_inode(container_pid)))
-    print(netns_ids)
     for net_name, net_id in overlay_networks.items():
         net_inspect = client.inspect_network(net_name, verbose=True)
         for task in net_inspect["Services"][""]["Tasks"]:
             docker_ips.add(task["EndpointIP"])
-            print(task["Name"], task["EndpointIP"], task["Info"]["Host IP"])
-    
+            cont_ip_to_name[task["EndpointIP"]] = task["Name"]
     def print_ipv4_event(cpu, data, size):
         event = b["tcp_ipv4_event"].event(data)
 
         # [TODO] can you filter this in ebpf itself?
         if event.type != 1 and event.type != 2:  
             return
-        if event.type == 1:
-            type_str = "C"
-        elif event.type == 2:
-            type_str = "A"
+        
         
         saddr = inet_ntop(AF_INET, pack("I", event.saddr))
         daddr = inet_ntop(AF_INET, pack("I", event.daddr))
 
         if saddr not in docker_ips or daddr not in docker_ips:
             return
-        print("%-2s " % (type_str), end="")
+        
+        if event.type == 1:
+            from_cont = saddr
+            to_cont = daddr
+        elif event.type == 2:
+            from_cont = daddr
+            to_cont = saddr
+        
+        print(f"Message from {cont_ip_to_name[from_cont]} to {cont_ip_to_name[to_cont]}")
 
-        print("%-6d %-16s %-2d %-16s %-16s %-6d %-6d" %
-            (event.pid, event.comm.decode('utf-8', 'replace'),
-            event.ip,
-            saddr,
-            daddr,
-            event.sport,
-            event.dport), end="")
-        print()
             
     netns_if = ' && '.join(['net_ns_inum != %s' % id for id in netns_ids])
     netns_filter = 'if (%s) { return 0; }' % netns_if
@@ -562,15 +557,10 @@ def main():
     b.attach_kprobe(event="tcp_close", fn_name="trace_close_entry")
     b.attach_kretprobe(event="inet_csk_accept", fn_name="trace_accept_return")
 
-    print("Tracing TCP established connections. Ctrl-C to end.")
-
-    
-    
-    print("%-2s %-6s %-16s %-2s %-16s %-16s %-6s %-6s" %
-            ("T", "PID", "COMM", "IP", "SADDR", "DADDR", "SPORT", "DPORT"))
-                                                                                                                
-
     b["tcp_ipv4_event"].open_perf_buffer(print_ipv4_event)
+
+    print("\nBeginning trace. Get your seatbelts on!!\n")
+
     while True:
         try:
             b.perf_buffer_poll()
@@ -579,5 +569,6 @@ def main():
 
 if __name__ == "__main__":
     print("[TODO]  What's  if (container_should_be_filtered()) ")
-    print("[TODO]  Handle two namespaces in same machine, call only once ")
+    print("[TODO]  Handle two namespaces in same machine, call print_event only once ")
+    print("[TODO]  Clean unnecessary functions in bpf_text ")
     main()
