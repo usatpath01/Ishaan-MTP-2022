@@ -4,6 +4,7 @@ import os
 from bcc import BPF
 from socket import inet_ntop, AF_INET, AF_INET6
 from struct import pack
+import hlcpy
 
 TCP_EVENT_TYPE_CONNECT = 1
 TCP_EVENT_TYPE_ACCEPT = 2
@@ -27,10 +28,17 @@ class NetworkInfo:
 
 def populate_network_info(net_info: NetworkInfo) -> None:
     with open("input.yml") as f:
-        containers_name = yaml.full_load(f)["local_containers"]
+        containers_name = yaml.full_load(f)["containers"]["local"]
     client = docker.APIClient(base_url='unix://var/run/docker.sock') 
     for cont in containers_name:
-        cont_inspect = client.inspect_container(cont)
+        try: 
+            cont_inspect = client.inspect_container(cont)
+        except docker.errors.NotFound:
+            print(f"Container named {cont} is not found. Please make sure it's running!")
+            exit()
+        if not cont_inspect["State"]["Running"]:
+            print(f"Container named {cont} is not running. Please make sure it's running!")
+            exit()
         cont_pid = cont_inspect["State"]["Pid"]
         cont_networks = cont_inspect["NetworkSettings"]["Networks"]
         assert len(cont_networks) == 1, "This script is written for containers connected to exactly one ovelay network"
@@ -42,6 +50,22 @@ def populate_network_info(net_info: NetworkInfo) -> None:
         for task in net_inspect["Services"][""]["Tasks"]:
             net_info.docker_ips.add(task["EndpointIP"])
             net_info.cont_ip_to_name[task["EndpointIP"]] = task["Name"]
+
+
+def handle_send_event(from_cont: str, to_cont: str):
+    # [TODO] send the current from_cont timestamp to timer of host in which to_cont resides. You can get host IP from docker network inspect -v <net> -> Services
+    pass
+
+
+def handle_receive_event(from_cont: str, to_cont: str):
+    global timer
+    print("Before updating:")
+    print(timer.timestamps[to_cont])
+    # [TODO] handle merge logic as in HLC paper. Current logic doesn't update logical component if physical component's not the same.
+    # [TODO] handle receive events from other hosts
+    timer.timestamps[to_cont].merge(timer.timestamps[from_cont])
+    print("After updating:")
+    print(timer.timestamps[to_cont])
 
 
 def bpf_init(net_info: NetworkInfo) -> BPF:
@@ -319,10 +343,14 @@ def bpf_init(net_info: NetworkInfo) -> BPF:
             print("Type: Send event")
             from_cont = saddr
             to_cont = daddr
+            handle_send_event(net_info.cont_ip_to_name[from_cont], 
+                net_info.cont_ip_to_name[to_cont])
         elif event.type == TCP_EVENT_TYPE_ACCEPT:
             print("Type: Receive event")
             from_cont = daddr
             to_cont = saddr
+            handle_receive_event(net_info.cont_ip_to_name[from_cont], 
+                net_info.cont_ip_to_name[to_cont])
         
         print(f"From: {net_info.cont_ip_to_name[from_cont]}")
         print(f"To {net_info.cont_ip_to_name[to_cont]}")
@@ -331,13 +359,36 @@ def bpf_init(net_info: NetworkInfo) -> BPF:
     b["tcp_ipv4_event"].open_perf_buffer(print_ipv4_event)
     return b
 
+
+class Timer:
+    # [TODO] should make the hlcpy implementation better using the original HLC paper: https://cse.buffalo.edu/tech-reports/2014-04.pdf
+    timestamps = {}
+    def __init__(self, containers=None):
+        if containers:
+            self.timestamps = {
+                cont: hlcpy.HLC.from_now() 
+                    for cont in containers
+            }
+    
+timer = Timer()
+
 def main():
+
+    if os.geteuid() != 0:
+        print("This script must be run as root\nBye!!")
+        exit(1)
+
     # [TODO] import typing
     net_info = NetworkInfo()
     populate_network_info(net_info)
+    all_container_names = list(net_info.cont_ip_to_name.values())
+    global timer
+    timer = Timer(all_container_names)
+
     b = bpf_init(net_info)
     
-    print("\nBeginning trace. Get your seatbelts on!!\n")
+    all_conts_joined = ", ".join(all_container_names)
+    print(f"\nMonitoring incoming and outgoing docker messages for the following containers: {all_conts_joined}\n")
 
     while True:
         try:
@@ -346,9 +397,12 @@ def main():
             exit()
 
 if __name__ == "__main__":
-    print("[TODO]  Handle two namespaces in same machine, call print_event only once ")
-    print("[TODO]  How often do the docker IPs and netns_inode numbers change? Should you periodically refresh them? ")
-    print("[TODO]  Currently only IPv4 is supported, this code is referenced from /usr/share/tools/bcc/tcptracer. It's bpf_text has the same functions for IPv6 too, if you need them in future. ")
-    print("[TODO]  Add documentation, comments")
-    
+    # [TODO]  Handle two namespaces in same machine, call print_event only once 
+    # [TODO]  Threading, lock, performance optimizations
+    # [TODO]  How often do the docker IPs and netns_inode numbers change? Should you periodically refresh them? Also, containers will get added and removed from time to time, handle that.
+    # [TODO]  Currently only IPv4 is supported, this code is referenced from /usr/share/tools/bcc/tcptracer. It's bpf_text has the same functions for IPv6 too, if you need them in future.
+    # [TODO]  Add documentation, comments examplaining network namespace inode numbers, eBPF filtering on which kprobes, etc.
+    # [TODO]  Handle edge cases, like container not up, etc.
+    # [TODO]  Write tests
+
     main()
