@@ -19,8 +19,7 @@ We'll initialize a docker swarm with Host1 as the manager, join the swarm from H
 
 
 **Host2**
-1. 
-`docker swarm join --token SWMTKN-1-5g90q48weqrtqryq4kj6ow0e8xm9wmv9o6vgqc5j320ymybd5c-8ex8j0bc40s6hgvy5ui5gl4gy 172.31.47.252:2377`
+1. `docker swarm join --token SWMTKN-1-5g90q48weqrtqryq4kj6ow0e8xm9wmv9o6vgqc5j320ymybd5c-8ex8j0bc40s6hgvy5ui5gl4gy 172.31.47.252:2377`
 
 
 ---
@@ -51,6 +50,7 @@ Note: You will join swarm from an IP address (ethernet interface of Wifi), if yo
 
 **About timer.py**
 - You can either do port based filtering (see activity only on ports which are exposed or containers are using to communicate), separately trace connect and accept connections (following /usr/share/tools/bcc/tcpconnect and tcpaccept). Started implementing using this approach (ports_timer.py) but thought netns_inode_num approach is better.
+- Port based is not good because we need exclusively inter-docker communication. We don't want to intercept requests to a container from any other service not part of the swarm.
 - Find the namespace id (as in uint32 link visible on `ls -l /proc/{$container_PID}/ns/net`) of containers on this overlay network and filter packets for those namespaces (following /usr/share/tools/bcc/tcptracer)
 ---
 - Install python dependencies (docker, pyyaml, iso8601, etc.) required to run timer.py and hlcpy manually.

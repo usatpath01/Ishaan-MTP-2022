@@ -2,12 +2,13 @@ from __future__ import annotations
 import threading
 import time
 import math
-from hlcpy.util import synchronized, nanos_to_iso8601, iso8601_to_nanos
+from hlcpy.util import nanos_to_human_readable, synchronized, nanos_to_iso8601, iso8601_to_nanos
 
 __version__ = "0.0.2"
 
 
 class HLC:
+    # https://martinfowler.com/articles/patterns-of-distributed-systems/hybrid-clock.html
     n_bits = 64
     n_bytes = int(n_bits / 8)
     millis_bits = 43
@@ -82,7 +83,7 @@ class HLC:
         return self.nanos, self.logical
 
     def __str__(self) -> str:
-        return "{}_{}".format(nanos_to_iso8601(self.nanos), self.logical)
+        return "P={}, L={}".format(nanos_to_human_readable(self.nanos), self.logical)
 
     def __repr__(self) -> str:
         return "HLC(nanos={},logical={})".format(self.nanos, self.logical)
@@ -121,5 +122,5 @@ class HLC:
         elif nanos == enanos:
             logical = elogical + 1
         else:
-            logical = 0
+            logical = max(clogical, elogical) + 1
         self._set(nanos, logical)

@@ -1,3 +1,4 @@
+import time
 import docker
 import yaml
 import os
@@ -19,16 +20,19 @@ class NetworkInfo:
     """
     
     """
+            
     def __init__(self):
         self.overlay_networks = {}
         self.cont_ip_to_name = {}
         self.netns_ids = set()
         self.docker_ips = set()
+        self.containers_name = set()
 
 
 def populate_network_info(net_info: NetworkInfo) -> None:
     with open("input.yml") as f:
         containers_name = yaml.full_load(f)["containers"]["local"]
+        net_info.containers_name = containers_name
     client = docker.APIClient(base_url='unix://var/run/docker.sock') 
     for cont in containers_name:
         try: 
@@ -50,22 +54,6 @@ def populate_network_info(net_info: NetworkInfo) -> None:
         for task in net_inspect["Services"][""]["Tasks"]:
             net_info.docker_ips.add(task["EndpointIP"])
             net_info.cont_ip_to_name[task["EndpointIP"]] = task["Name"]
-
-
-def handle_send_event(from_cont: str, to_cont: str):
-    # [TODO] send the current from_cont timestamp to timer of host in which to_cont resides. You can get host IP from docker network inspect -v <net> -> Services
-    pass
-
-
-def handle_receive_event(from_cont: str, to_cont: str):
-    global timer
-    print("Before updating:")
-    print(timer.timestamps[to_cont])
-    # [TODO] handle merge logic as in HLC paper. Current logic doesn't update logical component if physical component's not the same.
-    # [TODO] handle receive events from other hosts
-    timer.timestamps[to_cont].merge(timer.timestamps[from_cont])
-    print("After updating:")
-    print(timer.timestamps[to_cont])
 
 
 def bpf_init(net_info: NetworkInfo) -> BPF:
@@ -360,16 +348,57 @@ def bpf_init(net_info: NetworkInfo) -> BPF:
     return b
 
 
+    
+def get_logger():
+    import logging
+    import sys
+
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG)
+
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setLevel(logging.DEBUG)
+    formatter = logging.Formatter('\x1b[33;20m[LOG]\x1b[0m %(asctime)s.%(msecs)03d - %(funcName)s() - %(message)s', datefmt='%H:%M:%S')
+    handler.setFormatter(formatter)
+    root.addHandler(handler)
+    return root
+
+
+def handle_send_event(from_cont: str, to_cont: str):
+    # [TODO] send the current from_cont timestamp to timer of host in which to_cont resides. You can get host IP from docker network inspect -v <net> -> Services
+    pass
+
+
+def handle_receive_event(from_cont: str, to_cont: str):
+    global timer
+    print("Before updating:")
+    print(timer.get_time(to_cont))
+    # [TODO] handle merge logic as in HLC paper. Current logic doesn't update logical component if physical component's not the same.
+    # [TODO] handle receive events from other hosts
+    timer._timestamps[to_cont].merge(timer._timestamps[from_cont])
+    print("After updating:")
+    print(timer._timestamps[to_cont])
+    
+
 class Timer:
     # [TODO] should make the hlcpy implementation better using the original HLC paper: https://cse.buffalo.edu/tech-reports/2014-04.pdf
-    timestamps = {}
+    _timestamps = {}
     def __init__(self, containers=None):
         if containers:
-            self.timestamps = {
-                cont: hlcpy.HLC.from_now() 
+            self._timestamps = {
+                cont: hlcpy.HLC.from_now()
                     for cont in containers
             }
-    
+
+    def get_time(self, container: str):
+        nanos, logical = self._timestamps[container].tuple()
+        current_wall_clock_time = time.time_ns()
+        if nanos >= current_wall_clock_time:
+            logical += 1
+        self._timestamps[container]._set(max(nanos, current_wall_clock_time), logical)
+        return self._timestamps[container]
+
+
 timer = Timer()
 
 def main():
@@ -382,13 +411,15 @@ def main():
     net_info = NetworkInfo()
     populate_network_info(net_info)
     all_container_names = list(net_info.cont_ip_to_name.values())
+    logger = get_logger()
     global timer
     timer = Timer(all_container_names)
 
     b = bpf_init(net_info)
     
-    all_conts_joined = ", ".join(all_container_names)
+    all_conts_joined = ", ".join(net_info.containers_name)
     print(f"\nMonitoring incoming and outgoing docker messages for the following containers: {all_conts_joined}\n")
+
 
     while True:
         try:
@@ -398,11 +429,13 @@ def main():
 
 if __name__ == "__main__":
     # [TODO]  Handle two namespaces in same machine, call print_event only once 
-    # [TODO]  Threading, lock, performance optimizations
-    # [TODO]  How often do the docker IPs and netns_inode numbers change? Should you periodically refresh them? Also, containers will get added and removed from time to time, handle that.
+    # [TODO]  Not thread safe. Add Threading, locks, performance optimizations
+    # [TODO]  How often do the docker IPs and netns_inode numbers change? Should you periodically refresh them? Also, containers will get added and removed from time to time in the docker cluster/swarm handle that.
     # [TODO]  Currently only IPv4 is supported, this code is referenced from /usr/share/tools/bcc/tcptracer. It's bpf_text has the same functions for IPv6 too, if you need them in future.
     # [TODO]  Add documentation, comments examplaining network namespace inode numbers, eBPF filtering on which kprobes, etc.
     # [TODO]  Handle edge cases, like container not up, etc.
     # [TODO]  Write tests
+    # [TODO]  Does your code maintain timing guarantees when traffic is significant (because many logical events happening concurrently)? What are the timing/ordering guarantees?
+
 
     main()

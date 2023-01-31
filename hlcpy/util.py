@@ -22,6 +22,12 @@ def nanos_to_iso8601(nanos: int) -> str:
     return "{}.{:09.0f}Z".format(dt.strftime("%Y-%m-%dT%H:%M:%S"), nanos % nanos_order)
 
 
+def nanos_to_human_readable(nanos: int) -> str:
+    nanos_order = int(1e9)
+    dt = datetime.fromtimestamp(nanos // nanos_order, tz=timezone.utc)
+    return "{}.{:d}".format(dt.strftime("%H:%M:%S"), (nanos % nanos_order)//int(1e3))
+
+
 def iso8601_to_nanos(s: str) -> int:
     """
     Converts iso8601 string to nanoseconds

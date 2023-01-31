@@ -4,13 +4,18 @@ import requests
 app = Flask(__name__)
 
 
-@app.route('/flask_ishan1')
+@app.route('/')
 def home():
+    return "Available routes are:<br/>/hello<br/>/flask_ishan1<br/>/flask_ishan2"
+
+
+@app.route('/flask_ishan1')
+def flask_ishan1():
     return requests.get("http://flask_ishan:5000/hello").text
 
 
 @app.route('/flask_ishan2')
-def home2():
+def flask_ishan2():
     return requests.get("http://flask_ishan2:5001/hello").text
 
 
