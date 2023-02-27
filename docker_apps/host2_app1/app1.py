@@ -11,7 +11,7 @@ def home():
 
 @app.route('/flask_ishan1')
 def flask_ishan1():
-    return requests.get("http://flask_ishan:5000/hello").text
+    return requests.get("http://flask_ishan1:5000/hello").text
 
 
 @app.route('/flask_ishan2')

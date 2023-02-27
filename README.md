@@ -6,6 +6,9 @@
 - Install [eBPF](https://github.com/iovisor/bcc/blob/master/INSTALL.md). Prefer installation from source for your distro, sometimes package installation (sudo apt install <package>) doesn't work because of version conflicts. This will install bcc library and python-bcc. 
 - Install [docker](https://docs.docker.com/engine/install/ubuntu/) CLI. Make sure to run [post-installation steps](https://docs.docker.com/engine/install/linux-postinstall/) to avoid typing sudo for each docker command and for starting docker on boot.
 
+**Note:** To run this repo on smrl workstation (host-2), python runtime must be 3.8, create a virtualenv, install dependencies from requirements.txt and run `cp -r python_bcc_lib/bcc venv/lib/python3.8/site-packages/`. To run timer.py, run `sudo venv/bin/python3 timer.py`.
+
+---
 
 ### Run docker apps
 
