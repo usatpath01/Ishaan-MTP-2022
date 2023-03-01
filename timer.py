@@ -1,11 +1,14 @@
+import threading
 import time
 import docker
+import requests
 import yaml
 import os
 from bcc import BPF
 from socket import inet_ntop, AF_INET, AF_INET6
 from struct import pack
 import hlcpy
+from flask import Flask, request
 
 TCP_EVENT_TYPE_CONNECT = 1
 TCP_EVENT_TYPE_ACCEPT = 2
@@ -27,6 +30,7 @@ class NetworkInfo:
         self.netns_ids = set()
         self.docker_ips = set()
         self.containers_name = set()
+        self.cont_ip_to_host_ip = {}
 
 
 def populate_network_info(net_info: NetworkInfo) -> None:
@@ -52,8 +56,11 @@ def populate_network_info(net_info: NetworkInfo) -> None:
     for net_name, net_id in net_info.overlay_networks.items():
         net_inspect = client.inspect_network(net_name, verbose=True)
         for task in net_inspect["Services"][""]["Tasks"]:
-            net_info.docker_ips.add(task["EndpointIP"])
-            net_info.cont_ip_to_name[task["EndpointIP"]] = task["Name"]
+            cont_ip = task["EndpointIP"]
+            net_info.docker_ips.add(cont_ip)
+            net_info.cont_ip_to_name[cont_ip] = task["Name"]
+            net_info.cont_ip_to_host_ip[cont_ip] = task["Info"]["Host IP"]
+        
 
 
 def bpf_init(net_info: NetworkInfo) -> BPF:
@@ -332,7 +339,7 @@ def bpf_init(net_info: NetworkInfo) -> BPF:
             from_cont = saddr
             to_cont = daddr
             handle_send_event(net_info.cont_ip_to_name[from_cont], 
-                net_info.cont_ip_to_name[to_cont])
+                net_info.cont_ip_to_name[to_cont], net_info.cont_ip_to_host_ip[to_cont])
         elif event.type == TCP_EVENT_TYPE_ACCEPT:
             print("Type: Receive event")
             from_cont = daddr
@@ -349,24 +356,32 @@ def bpf_init(net_info: NetworkInfo) -> BPF:
 
 
     
-def get_logger():
-    import logging
-    import sys
+# def get_logger():
+#     import logging
+#     import sys
 
-    root = logging.getLogger()
-    root.setLevel(logging.DEBUG)
+#     root = logging.getLogger()
+#     root.setLevel(logging.DEBUG)
 
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setLevel(logging.DEBUG)
-    formatter = logging.Formatter('\x1b[33;20m[LOG]\x1b[0m %(asctime)s.%(msecs)03d - %(funcName)s() - %(message)s', datefmt='%H:%M:%S')
-    handler.setFormatter(formatter)
-    root.addHandler(handler)
-    return root
+#     handler = logging.StreamHandler(sys.stdout)
+#     handler.setLevel(logging.DEBUG)
+#     formatter = logging.Formatter('\x1b[33;20m[LOG]\x1b[0m %(asctime)s.%(msecs)03d - %(funcName)s() - %(message)s', datefmt='%H:%M:%S')
+#     handler.setFormatter(formatter)
+#     root.addHandler(handler)
+#     return root
 
 
-def handle_send_event(from_cont: str, to_cont: str):
+def handle_send_event(from_cont: str, to_cont: str, to_host: str):
     # [TODO] send the current from_cont timestamp to timer of host in which to_cont resides. You can get host IP from docker network inspect -v <net> -> Services
-    pass
+    global timer
+    nanos, logical = timer._timestamps[from_cont].tuple()
+    print(f"SEND: sending request to {to_host}")
+    requests.post(f"http://{to_host}:6723", data={
+            "from_cont": from_cont,
+            "to_cont": to_cont,
+            "time_from_cont_nanos": nanos,
+            "time_from_cont_logical": logical
+        })
 
 
 def handle_receive_event(from_cont: str, to_cont: str):
@@ -379,6 +394,24 @@ def handle_receive_event(from_cont: str, to_cont: str):
     print("After updating:")
     print(timer._timestamps[to_cont])
     
+
+def flask_app_init():
+    app = Flask(__name__)
+
+
+    @app.route('/', methods=["POST"])
+    def home():
+        print("RECEIVED ", request.form)
+        return ("", 204)
+
+    return app    
+
+
+def run_flask_server(flask_app):
+    import logging
+    logging.basicConfig(filename='flask_server.log',level=logging.DEBUG)
+    flask_app.run(host='0.0.0.0', port=6723)
+
 
 class Timer:
     # [TODO] should make the hlcpy implementation better using the original HLC paper: https://cse.buffalo.edu/tech-reports/2014-04.pdf
@@ -398,7 +431,6 @@ class Timer:
         self._timestamps[container]._set(max(nanos, current_wall_clock_time), logical)
         return self._timestamps[container]
 
-
 timer = Timer()
 
 def main():
@@ -411,12 +443,18 @@ def main():
     net_info = NetworkInfo()
     populate_network_info(net_info)
     all_container_names = list(net_info.cont_ip_to_name.values())
-    logger = get_logger()
+    # logger = get_logger()
     global timer
     timer = Timer(all_container_names)
 
     b = bpf_init(net_info)
     
+    flask_app = flask_app_init()
+    # flask_app.run(host='0.0.0.0', port=6723)
+    server_thread = threading.Thread(target=run_flask_server, args=(flask_app,))
+    server_thread.setDaemon(True)
+    server_thread.start()
+
     all_conts_joined = ", ".join(net_info.containers_name)
     print(f"\nMonitoring incoming and outgoing docker messages for the following containers: {all_conts_joined}\n")
 

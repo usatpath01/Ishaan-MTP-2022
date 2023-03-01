@@ -2,3 +2,4 @@ __pycache__
 venv
 hlcpy/__pycache__
 todo.txt
+*.log

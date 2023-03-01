@@ -9,6 +9,8 @@ __version__ = "0.0.2"
 
 class HLC:
     # https://martinfowler.com/articles/patterns-of-distributed-systems/hybrid-clock.html
+    # https://jaredforsyth.com/posts/hybrid-logical-clocks/
+    # https://hybrid-logical-clocks-example.surge.sh/
     n_bits = 64
     n_bytes = int(n_bits / 8)
     millis_bits = 43
